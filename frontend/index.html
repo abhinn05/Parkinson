@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Parkinson's Detector</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Parkinson's Disease Detector</h1>
+    <form id="uploadForm">
+      <label>Upload Image:</label>
+      <input type="file" name="image" required />
+      
+      <label>Upload Audio:</label>
+      <input type="file" name="audio" required />
+      
+      <label>Enter Age:</label>
+      <input type="number" name="age" step="any"  min="0" required />
+      
+      <button type="submit">Predict</button>
+    </form>
+    <div id="result"></div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
