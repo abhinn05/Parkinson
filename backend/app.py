@@ -1,85 +1,109 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
+import cv2
+import threading
 import os
 import joblib
-import tempfile
-from feature_extraction import extract_audio_features, record_video_and_compute_blink_rate  # your feature extraction functions
+import pandas as pd
+from combined import record_audio, record_video_and_compute_blink_rate, extract_audio_features
 
 app = Flask(__name__)
 CORS(app)
 
-# Load your models once at startup
+# --- Load models and constants ---
+AUDIO_FILENAME = "recorded_audio.wav"
+VIDEO_FILENAME = "recorded_video.avi"
+CSV_FILE = "test_cases.csv"
+DURATION = 15
+
 audio_model = joblib.load('parkinson_model.pkl')
 scaler = joblib.load('scaler.pkl')
+feature_names = joblib.load('feature_names.pkl')
 blink_model = joblib.load('blink_model.pkl')
 age_model = joblib.load('age_model.pkl')
+
+# --- Global webcam reference for streaming ---
+camera = cv2.VideoCapture(0)
+
+def generate_frames():
+    while True:
+        success, frame = camera.read()
+        if not success:
+            break
+        _, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
-        audio_file = request.files.get('audio')
-        image_file = request.files.get('image')
-        age_str = request.form.get('age')
-        print("Received age:", age_str, type(age_str))  # Debug print
+        data = request.get_json()
+        name = data.get('name', '').strip()
+        age = int(data.get('age', 0))
 
-        if age_str is None:
-            return jsonify({'error': 'Missing age'}), 400
+        if not name or age <= 0:
+            return jsonify({'error': 'Invalid input'}), 400
 
-        try:
-            age = float(age_str)
-        except ValueError:
-            return jsonify({'error': 'Invalid age value'}), 400
+        # --- Record audio and video ---
+        blink_rate_container = [None]
 
+        audio_thread = threading.Thread(target=record_audio, args=(AUDIO_FILENAME, DURATION))
+        video_thread = threading.Thread(target=record_video_and_compute_blink_rate, args=(VIDEO_FILENAME, DURATION, blink_rate_container))
 
-        # Validate inputs
-        if not audio_file or not image_file or age_str is None:
-            return jsonify({'error': 'Missing audio, image, or age'}), 400
+        audio_thread.start()
+        video_thread.start()
+        audio_thread.join()
+        video_thread.join()
 
-        try:
-            age = float(age_str)
-        except ValueError:
-            return jsonify({'error': 'Invalid age value'}), 400
+        blink_rate = blink_rate_container[0]
+        if blink_rate == -1.0 or blink_rate is None:
+            return jsonify({'error': 'Blink rate detection failed'}), 500
 
-        # Save files temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as af:
-            audio_path = af.name
-            audio_file.save(audio_path)
+        # --- Audio features ---
+        audio_features = extract_audio_features(AUDIO_FILENAME)
+        if all(v == -1.0 for v in audio_features.values()):
+            return jsonify({'error': 'Audio feature extraction failed'}), 500
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as imf:
-            image_path = imf.name
-            image_file.save(image_path)
+        row = {
+            "name": name,
+            "Age": age,
+            "Blink Rate": round(blink_rate, 2),
+            **audio_features
+        }
 
-        # Extract features
-        audio_features = extract_audio_features(audio_path)
-        blink_rate = record_video_and_compute_blink_rate(image_path)
+        if not os.path.isfile(CSV_FILE):
+            pd.DataFrame([row]).to_csv(CSV_FILE, index=False)
+        else:
+            pd.DataFrame([row]).to_csv(CSV_FILE, mode='a', header=False, index=False)
 
-        # Prediction
-        audio_scaled = scaler.transform([audio_features])
-        audio_proba = audio_model.predict_proba(audio_scaled)[0][1]
-        blink_proba = blink_model.predict_proba([[blink_rate]])[0][1]
-        age_proba = age_model.predict_proba([[age]])[0][1]
+        # --- Inference ---
+        df = pd.read_csv(CSV_FILE)
+        i = len(df) - 1
+        audio_input = scaler.transform([df.loc[i, feature_names]])
+        audio_proba = audio_model.predict_proba(audio_input)[0][1]
+        blink_proba = blink_model.predict_proba([[df.loc[i, 'Blink Rate']]])[0][1]
+        age_proba = age_model.predict_proba([[df.loc[i, 'Age']]])[0][1]
 
-        # Fuse probabilities
-        blink_weight = 0.3
-        age_weight = 0.2
-        audio_weight = 1 - blink_weight - age_weight
-
-        fused_proba = (audio_weight * audio_proba +
-                       blink_weight * blink_proba +
-                       age_weight * age_proba)
-
+        fused_proba = 0.5 * audio_proba + 0.3 * blink_proba + 0.2 * age_proba
         prediction = 1 if fused_proba >= 0.5 else 0
 
-        # Cleanup
-        os.remove(audio_path)
-        os.remove(image_path)
+        # Clean up
+        for f in [AUDIO_FILENAME, VIDEO_FILENAME]:
+            if os.path.exists(f):
+                os.remove(f)
 
         return jsonify({
-            'audio_proba': round(audio_proba, 4),
-            'blink_proba': round(blink_proba, 4),
-            'age_proba': round(age_proba, 4),
-            'fused_proba': round(fused_proba, 4),
-            'prediction': "Parkinson's Detected (1)" if prediction else "No Parkinson's (0)"
+            "name": name,
+            "prediction": prediction,
+            "fused_proba": fused_proba,
+            "audio_proba": audio_proba,
+            "blink_proba": blink_proba,
+            "age_proba": age_proba,
+            "blink_rate": blink_rate
         })
 
     except Exception as e:

@@ -1,28 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Parkinson's Detector</title>
-  <link rel="stylesheet" href="styles.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parkinson's Detection App</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="container">
-    <h1>Parkinson's Disease Detector</h1>
-    <form id="uploadForm">
-      <label>Upload Image:</label>
-      <input type="file" name="image" required />
-      
-      <label>Upload Audio:</label>
-      <input type="file" name="audio" required />
-      
-      <label>Enter Age:</label>
-      <input type="number" name="age" step="any"  min="0" required />
-      
-      <button type="submit">Predict</button>
-    </form>
-    <div id="result"></div>
+    <h1>🧠 Parkinson's Detection App</h1>
+
+    <div class="input-section">
+      <label>Name:</label>
+      <input type="text" id="name" placeholder="Enter patient name">
+
+      <label>Age:</label>
+      <input type="number" id="age" placeholder="Enter patient age">
+
+      <div class="actions">
+        <button id="record-btn">🎙 Record & Predict</button>
+        <p id="status"></p>
+      </div>
+    </div>
+
+    <div class="results" id="results" hidden>
+      <h2>📝 Results</h2>
+      <ul id="output-list"></ul>
+    </div>
+
+    <!-- Add this inside .container -->
+    <h2>🎥 Live Video Feed</h2>
+    <img id="live-video" src="http://localhost:5000/video_feed" width="100%" style="border-radius: 8px; margin-bottom: 20px;">
+
   </div>
+
   <script src="script.js"></script>
 </body>
 </html>
